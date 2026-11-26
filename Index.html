@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phone → OneDrive Safe Mover</title>
+<style>
+  :root{--bg:#f4f6f9;--card:#fff;--ink:#1d2430;--mute:#667085;--line:#e3e7ee;--blue:#0a66c2;--green:#1a7f37;--amber:#b25e00;--red:#c62828}
+  *{box-sizing:border-box}
+  body{margin:0;font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--ink)}
+  header{background:var(--blue);color:#fff;padding:14px 16px}
+  header h1{margin:0;font-size:19px}
+  header p{margin:2px 0 0;font-size:13px;opacity:.9}
+  main{max-width:720px;margin:0 auto;padding:12px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:12px}
+  .card h2{margin:0 0 8px;font-size:16px;display:flex;gap:8px;align-items:center}
+  .num{display:inline-grid;place-items:center;width:24px;height:24px;border-radius:50%;background:var(--blue);color:#fff;font-size:13px;flex:none}
+  .done .num{background:var(--green)}
+  .mute{color:var(--mute);font-size:13px}
+  button{font:inherit;border:0;border-radius:8px;padding:10px 14px;background:var(--blue);color:#fff;cursor:pointer}
+  button.ghost{background:#eef3fb;color:var(--blue)}
+  button.warn{background:#fdecea;color:var(--red)}
+  button:disabled{opacity:.45;cursor:default}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px}
+  input[type=text],select{font:inherit;width:100%;padding:9px;border:1px solid var(--line);border-radius:8px}
+  label{font-size:13px;color:var(--mute);display:block;margin-top:8px}
+  code{background:#f0f2f5;padding:1px 5px;border-radius:4px;font-size:13px;word-break:break-all}
+  ol{padding-left:20px;margin:6px 0}
+  ol li{margin:4px 0;font-size:14px}
+  .folders{border:1px solid var(--line);border-radius:8px;max-height:260px;overflow:auto;margin-top:8px}
+  .folders div{padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer}
+  .folders div:last-child{border-bottom:0}
+  .folders div:active{background:#eef3fb}
+  .path{font-weight:600;word-break:break-all}
+  .file{border-top:1px solid var(--line);padding:8px 0}
+  .file:first-child{border-top:0}
+  .fname{word-break:break-all;font-size:14px}
+  .bar{height:6px;background:#edf0f4;border-radius:3px;overflow:hidden;margin-top:4px}
+  .bar i{display:block;height:100%;width:0;background:var(--blue);transition:width .2s}
+  .st{font-size:12px;font-weight:600}
+  .ok{color:var(--green)} .am{color:var(--amber)} .bad{color:var(--red)}
+  .note{border-radius:8px;padding:10px;font-size:14px;margin-top:8px}
+  .note.info{background:#eef3fb} .note.good{background:#e8f5ec} .note.err{background:#fdecea}
+  .summary{display:flex;gap:14px;flex-wrap:wrap;font-size:14px;margin-top:6px}
+  details summary{cursor:pointer;font-weight:600}
+</style>
+</head>
+<body>
+<header>
+  <h1>Phone → OneDrive Safe Mover</h1>
+  <p>Copies files to OneDrive, checks every copy, and never deletes anything from your phone.</p>
+</header>
+<main>
+
+  <!-- 0. One-time setup -->
+  <div class="card" id="setupCard">
+    <details id="setupDetails">
+      <summary>One-time setup (Microsoft app ID)</summary>
+      <p class="mute">To reach your OneDrive, this page needs a free "app registration" from Microsoft. You do this once.</p>
+      <ol>
+        <li>Open <code>https://entra.microsoft.com</code> → <b>App registrations</b> → <b>New registration</b>.</li>
+        <li>Name: <code>Phone OneDrive Mover</code>. Account type: <b>Accounts in any organizational directory and personal Microsoft accounts</b>.</li>
+        <li>Redirect URI: choose platform <b>Single-page application (SPA)</b> and paste exactly:<br><code id="redirShow"></code> <button class="ghost" id="copyRedir" style="padding:4px 8px;font-size:13px">Copy</button></li>
+        <li>Click <b>Register</b>. Copy the <b>Application (client) ID</b> and paste it below.</li>
+      </ol>
+      <label for="clientId">Application (client) ID</label>
+      <input type="text" id="clientId" placeholder="e.g. 1a2b3c4d-....">
+      <label for="tenant">Which OneDrive?</label>
+      <select id="tenant">
+        <option value="common">Personal or work account (default)</option>
+        <option value="consumers">Personal Microsoft account only</option>
+        <option value="organizations">Work / school account only</option>
+      </select>
+      <div class="row"><button id="saveCfg">Save</button><span class="mute" id="cfgMsg"></span></div>
+    </details>
+  </div>
+
+  <!-- 1. Sign in -->
+  <div class="card" id="c1">
+    <h2><span class="num">1</span>Sign in to OneDrive</h2>
+    <div id="signedOut">
+      <p class="mute">Sign in first. (Signing in reloads this page, so choose files after this step.)</p>
+      <button id="signIn">Sign in with Microsoft</button>
+    </div>
+    <div id="signedIn" hidden>
+      <p>Signed in as <b id="who"></b></p>
+      <button class="ghost" id="signOut">Sign out</button>
+    </div>
+    <div id="authMsg"></div>
+  </div>
+
+  <!-- 2. Folder -->
+  <div class="card" id="c2">
+    <h2><span class="num">2</span>Choose OneDrive folder</h2>
+    <p>Selected: <span class="path" id="selFolder">none</span></p>
+    <label for="linkIn">OneDrive folder link</label>
+    <input type="text" id="linkIn" placeholder="Paste your OneDrive folder link (saved on this phone only)">
+    <div class="row"><button id="linkBtn" disabled>Use this link</button></div>
+    <div id="linkMsg"></div>
+    <p class="mute" style="margin-top:10px">Or pick a folder from your own OneDrive:</p>
+    <div id="browser" hidden>
+      <p class="mute">Now browsing: <span class="path" id="curPath">/</span></p>
+      <div class="folders" id="folderList"></div>
+      <div class="row">
+        <button class="ghost" id="upBtn">⬆ Up</button>
+        <button class="ghost" id="newFolderBtn">＋ New folder</button>
+        <button id="useFolderBtn">Use this folder</button>
+      </div>
+    </div>
+    <div class="row"><button class="ghost" id="browseBtn" disabled>Browse folders</button></div>
+  </div>
+
+  <!-- 3. Files -->
+  <div class="card" id="c3">
+    <h2><span class="num">3</span>Choose files on your phone</h2>
+    <p class="mute">In the picker, tap ☰ or "Browse" to reach Internal storage (DCIM, Download, WhatsApp, etc.). Your originals stay where they are.</p>
+    <input type="file" id="filePick" multiple hidden>
+    <div class="row">
+      <button id="pickBtn">Select files</button>
+      <button class="ghost" id="clearBtn" disabled>Clear list</button>
+    </div>
+    <label style="display:flex;gap:6px;align-items:center;margin-top:10px;color:var(--ink);font-size:14px">
+      <input type="checkbox" id="skipDone" checked> Skip files already verified under this folder in an earlier run
+    </label>
+    <div class="summary" id="pickSummary"></div>
+  </div>
+
+  <!-- 4. Upload -->
+  <div class="card" id="c4">
+    <h2><span class="num">4</span>Upload and verify</h2>
+    <p class="mute">Each run creates a new folder named with the date and time (e.g. <code>2026-11-26_21-31-05</code>) inside the folder from step 2. "Retry failed files" puts files into that same folder.</p>
+    <p class="mute">Keep this page open and the screen on until it finishes. Each file is checked by size and by Microsoft's file fingerprint (quickXorHash) after it is uploaded.</p>
+    <div class="row">
+      <button id="startBtn" disabled>Start upload</button>
+      <button class="ghost" id="retryBtn" hidden>Retry failed files</button>
+    </div>
+    <div id="batchMsg"></div>
+    <div class="summary" id="runSummary"></div>
+    <div id="fileList" style="margin-top:8px"></div>
+  </div>
+
+  <!-- 5. Results -->
+  <div class="card" id="c5">
+    <h2><span class="num">5</span>Free up space on the phone (you do this)</h2>
+    <div class="note info">This page <b>cannot and will not delete</b> anything from your phone. Delete originals yourself, and only the ones marked <span class="ok">✔ Verified</span>. Files marked failed are still safe on your phone; just retry them.</div>
+    <div id="resultBox"></div>
+    <div class="row">
+      <button class="ghost" id="reportBtn">Download report (CSV)</button>
+      <button class="warn" id="clearLogBtn">Clear history</button>
+    </div>
+    <p class="mute" id="logCount"></p>
+  </div>
+
+</main>
+<script>
+"use strict";
+/* ---------- small helpers ---------- */
+const $ = id => document.getElementById(id);
+const store = (s) => ({
+  get(k, d){ try{ const v = s.getItem(k); return v === null ? d : JSON.parse(v); }catch(e){ return d; } },
+  set(k, v){ try{ s.setItem(k, JSON.stringify(v)); }catch(e){} },
+  del(k){ try{ s.removeItem(k); }catch(e){} }
+});
+const LS = store(window.localStorage), SS = store(window.sessionStorage);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const backoff = a => Math.min(30000, 1000 * Math.pow(2, a)) + Math.random() * 500;
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function fmt(b){ if(b < 1024) return b + ' B'; const u=['KB','MB','GB']; let i=-1; do{ b/=1024; i++; }while(b>=1024 && i<2); return b.toFixed(b<10?1:0)+' '+u[i]; }
+function retryAfter(r){ const v = r && r.headers.get('Retry-After'); const n = v ? parseInt(v,10) : NaN; return isNaN(n) ? 0 : n*1000; }
+function note(el, cls, html){ el.innerHTML = html ? `<div class="note ${cls}">${html}</div>` : ''; }
+
+const GRAPH = 'https://graph.microsoft.com/v1.0';
+const SCOPES = 'offline_access User.Read Files.ReadWrite.All';
+const drv = f => f && f.driveId ? `/drives/${f.driveId}` : '/me/drive';
+const CHUNK = 320 * 1024 * 16;           // 5 MiB — Graph needs multiples of 320 KiB
+const redirectUri = () => location.origin + location.pathname;
+
+let cfg = LS.get('odm_cfg', { clientId: '', tenant: 'common' });
+let tokens = SS.get('odm_tokens', null);
+let folder = LS.get('odm_folder', null);   // {id, path}
+let browseStack = [];                      // [{id, name}]
+let picked = [];                           // [{file, key, status, msg, pct, remote}]
+let running = false;
+let batch = null;                          // timestamp sub-folder for the current run {id, path, parentId}
+
+/* ---------- quickXorHash (OneDrive's file fingerprint) ---------- */
+class QuickXor {
+  constructor(){ this.cells = new Uint8Array(20); this.shift = 0; this.len = 0; this.acc = new Uint8Array(160); }
+  update(buf){
+    const n = buf.length, acc = this.acc; acc.fill(0);
+    for(let j = 0, k = 0; j < n; j++){ acc[k] ^= buf[j]; if(++k === 160) k = 0; }
+    const it = Math.min(n, 160), c = this.cells;
+    for(let i = 0; i < it; i++){
+      const x = acc[i]; if(!x) continue;
+      const p = (this.shift + 11 * i) % 160, bi = p >> 3, bo = p & 7;
+      c[bi] ^= (x << bo) & 255;
+      if(bo) c[(bi + 1) % 20] ^= x >> (8 - bo);
+    }
+    this.shift = (this.shift + 11 * (n % 160)) % 160;
+    this.len += n;
+  }
+  digest(){
+    const out = this.cells.slice(); let L = this.len;
+    for(let i = 0; i < 8; i++){ out[12 + i] ^= L % 256; L = Math.floor(L / 256); }
+    let s = ''; for(const b of out) s += String.fromCharCode(b);
+    return btoa(s);
+  }
+}
+async function hashWholeFile(f){
+  const h = new QuickXor();
+  for(let o = 0; o < f.size; o += CHUNK) h.update(new Uint8Array(await f.slice(o, Math.min(o + CHUNK, f.size)).arrayBuffer()));
+  return h.digest();
+}
+
+/* ---------- sign-in (OAuth 2.0 + PKCE, no external libraries) ---------- */
+function b64url(buf){ let s=''; for(const x of new Uint8Array(buf)) s += String.fromCharCode(x); return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
+function randStr(n){ const a = new Uint8Array(n); crypto.getRandomValues(a); return b64url(a); }
+
+async function signIn(){
+  if(!cfg.clientId){ $('setupDetails').open = true; note($('authMsg'),'err','Do the one-time setup above first and save the Application (client) ID.'); return; }
+  const verifier = randStr(48), state = randStr(16);
+  const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+  SS.set('odm_pkce', { verifier, state });
+  const p = new URLSearchParams({ client_id: cfg.clientId, response_type: 'code', redirect_uri: redirectUri(), response_mode: 'query',
+    scope: SCOPES, code_challenge: challenge, code_challenge_method: 'S256', state, prompt: 'select_account' });
+  location.href = `https://login.microsoftonline.com/${cfg.tenant}/oauth2/v2.0/authorize?${p}`;
+}
+async function tokenRequest(params){
+  const r = await fetch(`https://login.microsoftonline.com/${cfg.tenant}/oauth2/v2.0/token`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: cfg.clientId, scope: SCOPES, ...params }) });
+  const j = await r.json().catch(() => ({}));
+  if(!r.ok) throw new Error(j.error_description || j.error || ('Sign-in error ' + r.status));
+  tokens = { access: j.access_token, refresh: j.refresh_token || (tokens && tokens.refresh), exp: Date.now() + (j.expires_in - 120) * 1000 };
+  SS.set('odm_tokens', tokens);
+}
+async function handleRedirect(){
+  const q = new URLSearchParams(location.search);
+  if(!q.has('code') && !q.has('error')) return;
+  history.replaceState(null, '', redirectUri());
+  if(q.has('error')){ note($('authMsg'),'err','Sign-in failed: ' + esc(q.get('error_description') || q.get('error'))); return; }
+  const p = SS.get('odm_pkce', null); SS.del('odm_pkce');
+  if(!p || p.state !== q.get('state')){ note($('authMsg'),'err','Sign-in check failed. Please try again.'); return; }
+  try{ await tokenRequest({ grant_type: 'authorization_code', code: q.get('code'), redirect_uri: redirectUri(), code_verifier: p.verifier }); }
+  catch(e){ note($('authMsg'),'err', esc(e.message)); }
+}
+async function getAccess(force){
+  if(!tokens) throw Object.assign(new Error('Not signed in. Please sign in again.'), { auth: true });
+  if(force || Date.now() > tokens.exp){
+    if(!tokens.refresh) throw Object.assign(new Error('Session expired. Please sign in again.'), { auth: true });
+    try{ await tokenRequest({ grant_type: 'refresh_token', refresh_token: tokens.refresh }); }
+    catch(e){ throw Object.assign(new Error('Session expired (' + e.message + '). Please sign in again.'), { auth: true }); }
+  }
+  return tokens.access;
+}
+
+/* ---------- Microsoft Graph with retries ---------- */
+async function graph(path, opts = {}){
+  const url = path.startsWith('http') ? path : GRAPH + path;
+  let refreshed = false;
+  for(let a = 0; a < 6; a++){
+    const tok = await getAccess(false);
+    let r;
+    try{ r = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + tok } }); }
+    catch(e){ if(a === 5) throw new Error('Network error: ' + e.message); await sleep(backoff(a)); continue; }
+    if(r.status === 401 && !refreshed){ refreshed = true; await getAccess(true); a--; continue; }
+    if(r.status === 429 || r.status >= 500){ await sleep(retryAfter(r) || backoff(a)); continue; }
+    if(!r.ok){
+      let m = ''; try{ const j = await r.json(); m = j.error && j.error.message; }catch(e){}
+      throw Object.assign(new Error(m || ('HTTP ' + r.status)), { status: r.status });
+    }
+    return r.status === 204 ? null : r.json();
+  }
+  throw new Error('OneDrive is busy; gave up after several retries.');
+}
+
+/* ---------- step 1 UI ---------- */
+async function refreshAuthUI(){
+  const ok = !!tokens;
+  $('signedOut').hidden = ok; $('signedIn').hidden = !ok;
+  $('c1').classList.toggle('done', ok);
+  $('browseBtn').disabled = !ok; $('linkBtn').disabled = !ok;
+  if(ok){
+    try{ const me = await graph('/me?$select=displayName,userPrincipalName'); $('who').textContent = me.displayName || me.userPrincipalName || 'you'; }
+    catch(e){ $('who').textContent = 'you'; if(e.auth){ tokens = null; SS.del('odm_tokens'); refreshAuthUI(); note($('authMsg'),'err',esc(e.message)); } }
+  }
+  updateButtons();
+}
+
+/* ---------- step 2: folder browser ---------- */
+async function openFolder(id, name){
+  $('folderList').innerHTML = '<div class="mute">Loading…</div>';
+  try{
+    let url = `/me/drive/items/${id}/children?$select=id,name,folder&$top=200&$orderby=name`;
+    const list = [];
+    while(url){ const j = await graph(url); for(const it of j.value) if(it.folder) list.push(it); url = j['@odata.nextLink'] || null; }
+    if(id === 'root' && !browseStack.length){ const root = await graph('/me/drive/root?$select=id'); browseStack = [{ id: root.id, name: '' }]; }
+    else if(name !== undefined) browseStack.push({ id, name });
+    $('curPath').textContent = pathOf(browseStack);
+    $('folderList').innerHTML = list.length ? '' : '<div class="mute">(no sub-folders)</div>';
+    for(const it of list){
+      const d = document.createElement('div'); d.textContent = '📁 ' + it.name;
+      d.onclick = () => openFolder(it.id, it.name);
+      $('folderList').appendChild(d);
+    }
+  }catch(e){ $('folderList').innerHTML = `<div class="bad">${esc(e.message)}</div>`; }
+}
+const pathOf = st => '/' + st.slice(1).map(s => s.name).join('/');
+async function goUp(){
+  if(browseStack.length <= 1) return;
+  browseStack.pop(); const cur = browseStack.pop();
+  await openFolder(cur.id, cur.name);
+  if(browseStack.length === 0) browseStack = [cur]; // root safety
+}
+async function newFolder(){
+  const name = (prompt('New folder name:') || '').trim(); if(!name) return;
+  const cur = browseStack[browseStack.length - 1];
+  try{
+    const f = await graph(`/me/drive/items/${cur.id}/children`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, folder: {}, '@microsoft.graph.conflictBehavior': 'fail' }) });
+    await openFolder(f.id, f.name);
+  }catch(e){ alert('Could not create folder: ' + e.message); }
+}
+async function resolveLink(url){
+  const enc = 'u!' + btoa(unescape(encodeURIComponent(url))).replace(/=+$/,'').replace(/\//g,'_').replace(/\+/g,'-');
+  const it = await graph(`/shares/${enc}/driveItem?$select=id,name,folder,parentReference`);
+  if(!it.folder) throw new Error('That link is not a folder.');
+  return { id: it.id, driveId: it.parentReference && it.parentReference.driveId, path: it.name, link: url };
+}
+async function useLink(url){
+  note($('linkMsg'), 'info', 'Opening shared folder…');
+  try{
+    folder = await resolveLink(url); LS.set('odm_folder', folder);
+    note($('linkMsg'), 'good', 'Using folder <b>' + esc(folder.path) + '</b> from your link.');
+    $('browser').hidden = true; showFolder(); markSkips(); renderFiles(); updateButtons();
+  }catch(e){ note($('linkMsg'), 'err', 'Could not open the link: ' + esc(e.message)); if(e.auth){ tokens = null; SS.del('odm_tokens'); refreshAuthUI(); } }
+}
+function useFolder(){
+  const cur = browseStack[browseStack.length - 1];
+  folder = { id: cur.id, driveId: null, path: pathOf(browseStack) };
+  LS.set('odm_folder', folder);
+  $('browser').hidden = true;
+  showFolder(); markSkips(); renderFiles(); updateButtons();
+}
+function showFolder(){ $('selFolder').textContent = folder ? folder.path : 'none'; $('c2').classList.toggle('done', !!folder); }
+
+/* ---------- step 3: files ---------- */
+const keyOf = f => [f.name, f.size, f.lastModified].join('|');
+function history_(){ return LS.get('odm_log', []); }
+function isDoneBefore(f){ return folder && history_().some(h => h.key === keyOf(f) && h.folderId === folder.id && h.status === 'verified'); }
+function markSkips(){
+  for(const p of picked){
+    if(p.status === 'verified' || p.status === 'uploading') continue;
+    if($('skipDone').checked && isDoneBefore(p.file)){ p.status = 'skipped'; p.msg = 'Already verified in this folder earlier'; }
+    else if(p.status === 'skipped'){ p.status = 'waiting'; p.msg = ''; }
+  }
+}
+function addFiles(list){
+  const have = new Set(picked.map(p => p.key));
+  for(const f of list){ const k = keyOf(f); if(have.has(k)) continue; have.add(k); picked.push({ file: f, key: k, status: 'waiting', msg: '', pct: 0 }); }
+  markSkips(); renderFiles(); updateButtons();
+}
+function renderFiles(){
+  const total = picked.reduce((s, p) => s + p.file.size, 0);
+  $('pickSummary').innerHTML = picked.length ? `<span><b>${picked.length}</b> files</span><span><b>${fmt(total)}</b></span>` : '';
+  $('c3').classList.toggle('done', picked.length > 0);
+  const box = $('fileList'); box.innerHTML = '';
+  const label = { waiting:['Waiting',''], uploading:['Uploading',''], verifying:['Checking…','am'], verified:['✔ Verified','ok'],
+                  sizeonly:['✔ Uploaded (size matches; no fingerprint from OneDrive)','am'], failed:['✖ Failed — original still on phone','bad'], skipped:['Skipped','mute'] };
+  for(const p of picked){
+    const [t, c] = label[p.status] || [p.status, ''];
+    const d = document.createElement('div'); d.className = 'file';
+    d.innerHTML = `<div class="fname">${esc(p.file.name)} <span class="mute">(${fmt(p.file.size)})</span></div>
+      <div class="st ${c}">${t}${p.msg ? ' — <span style="font-weight:400">' + esc(p.msg) + '</span>' : ''}</div>
+      ${p.status === 'uploading' || p.status === 'verifying' ? `<div class="bar"><i style="width:${p.pct}%"></i></div>` : ''}`;
+    p.el = d; box.appendChild(d);
+  }
+  const n = s => picked.filter(p => p.status === s).length;
+  $('runSummary').innerHTML = picked.length ? `<span class="ok">Verified: ${n('verified') + n('sizeonly')}</span><span class="bad">Failed: ${n('failed')}</span><span class="mute">Waiting: ${n('waiting')}</span><span class="mute">Skipped: ${n('skipped')}</span>` : '';
+  $('retryBtn').hidden = running || n('failed') === 0;
+  renderResults();
+}
+function setProgress(p, pct){ p.pct = pct; const bar = p.el && p.el.querySelector('.bar i'); if(bar) bar.style.width = pct + '%'; }
+function updateButtons(){
+  $('startBtn').disabled = running || !tokens || !folder || !picked.some(p => p.status === 'waiting');
+  $('pickBtn').disabled = running; $('clearBtn').disabled = running || !picked.length;
+}
+
+/* ---------- step 4: upload one file safely ---------- */
+async function sessionNext(uploadUrl){
+  try{
+    const r = await fetch(uploadUrl);
+    if(!r.ok) return null;
+    const j = await r.json();
+    const rg = j.nextExpectedRanges && j.nextExpectedRanges[0];
+    return rg ? parseInt(rg.split('-')[0], 10) : null;
+  }catch(e){ return null; }
+}
+function stampName(){
+  const d = new Date(), z = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}_${z(d.getHours())}-${z(d.getMinutes())}-${z(d.getSeconds())}`;
+}
+async function createBatchFolder(){
+  const f = await graph(`${drv(folder)}/items/${folder.id}/children`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: stampName(), folder: {}, '@microsoft.graph.conflictBehavior': 'rename' }) });
+  return { id: f.id, driveId: folder.driveId || null, path: (folder.path === '/' ? '' : folder.path) + '/' + f.name, parentId: folder.id };
+}
+async function uploadOne(p){
+  const f = p.file, base = `${drv(batch)}/items/${batch.id}:/${encodeURIComponent(f.name)}:`;
+  let item;
+  if(f.size === 0){
+    item = await graph(`${base}/content?@microsoft.graph.conflictBehavior=rename`, { method: 'PUT', body: new Blob([]) });
+  } else {
+    // "rename" means an existing OneDrive file is never overwritten
+    const sess = await graph(`${base}/createUploadSession`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item: { '@microsoft.graph.conflictBehavior': 'rename' } }) });
+    const url = sess.uploadUrl;
+    const hasher = new QuickXor(); let hashedTo = 0, offset = 0, stalls = 0;
+    while(!item){
+      const end = Math.min(offset + CHUNK, f.size);
+      const buf = new Uint8Array(await f.slice(offset, end).arrayBuffer());
+      if(offset <= hashedTo && end > hashedTo){ hasher.update(buf.subarray(hashedTo - offset)); hashedTo = end; }
+      let r = null, lastErr = '';
+      for(let a = 0; a < 6 && !r; a++){
+        try{
+          const resp = await fetch(url, { method: 'PUT', headers: { 'Content-Range': `bytes ${offset}-${end - 1}/${f.size}` }, body: buf });
+          if(resp.status === 429 || resp.status >= 500){ lastErr = 'server ' + resp.status; await sleep(retryAfter(resp) || backoff(a)); continue; }
+          r = resp;
+        }catch(e){ lastErr = e.message; await sleep(backoff(a)); }
+      }
+      if(!r || r.status === 416){
+        const nx = await sessionNext(url);            // ask OneDrive what it already has, then resume
+        if(nx === null || ++stalls > 8) throw new Error('Connection lost' + (lastErr ? ' (' + lastErr + ')' : ''));
+        offset = nx; continue;
+      }
+      if(r.status === 200 || r.status === 201){ item = await r.json(); break; }
+      if(r.status === 202){
+        const j = await r.json().catch(() => ({}));
+        const rg = j.nextExpectedRanges && j.nextExpectedRanges[0];
+        offset = rg ? parseInt(rg.split('-')[0], 10) : end; stalls = 0;
+        setProgress(p, Math.round(offset / f.size * 95)); continue;
+      }
+      let m = ''; try{ const j = await r.json(); m = j.error && j.error.message; }catch(e){}
+      throw new Error(r.status === 404 ? 'Upload session expired' : (m || 'Upload error ' + r.status));
+    }
+    p.localHash = hashedTo === f.size ? hasher.digest() : null;
+  }
+  // ---- verify against what OneDrive actually stored ----
+  p.status = 'verifying'; renderFiles(); setProgress(p, 97);
+  const localHash = p.localHash || await hashWholeFile(f);
+  let remote = null;
+  for(let i = 0; i < 4; i++){
+    remote = await graph(`${drv(batch)}/items/${item.id}?$select=id,name,size,file,webUrl`);
+    if(remote.file && remote.file.hashes && remote.file.hashes.quickXorHash) break;
+    await sleep(1500 * (i + 1));
+  }
+  p.remote = { id: remote.id, name: remote.name, webUrl: remote.webUrl };
+  if(remote.size !== f.size) throw Object.assign(new Error(`Size mismatch (phone ${f.size} B, OneDrive ${remote.size} B). Bad copy "${remote.name}" may need deleting in OneDrive.`), { noRetry: false });
+  const rh = remote.file && remote.file.hashes && remote.file.hashes.quickXorHash;
+  if(rh && rh !== localHash) throw new Error(`Fingerprint mismatch. Bad copy "${remote.name}" may need deleting in OneDrive.`);
+  p.status = rh ? 'verified' : 'sizeonly';
+  p.msg = remote.name !== f.name ? `saved as "${remote.name}" (a file with the same name already existed)` : '';
+  setProgress(p, 100);
+}
+
+async function runAll(newBatch){
+  if(running) return;
+  running = true; updateButtons(); renderFiles();
+  if(!newBatch && batch && batch.parentId === folder.id){
+    // the earlier timestamp folder may have been moved away or deleted; check it still exists
+    try{ await graph(`${drv(batch)}/items/${batch.id}?$select=id,deleted`); }
+    catch(e){ if(e.status === 404) batch = null; }
+  }
+  if(newBatch || !batch || batch.parentId !== folder.id){
+    try{ batch = await createBatchFolder(); }
+    catch(e){
+      running = false; updateButtons();
+      note($('batchMsg'), 'err', 'Could not create the timestamp folder: ' + esc(e.message) + '. Nothing was uploaded; your files are safe.');
+      if(e.auth){ tokens = null; SS.del('odm_tokens'); refreshAuthUI(); }
+      return;
+    }
+  }
+  note($('batchMsg'), 'info', 'Uploading into: <b>' + esc(batch.path) + '</b>');
+  let lock = null;
+  try{ if('wakeLock' in navigator) lock = await navigator.wakeLock.request('screen'); }catch(e){}
+  for(const p of picked){
+    if(p.status !== 'waiting') continue;
+    let attempt = 0;
+    while(true){
+      p.status = 'uploading'; p.msg = attempt ? 'retrying…' : ''; p.pct = 0; renderFiles();
+      try{ await uploadOne(p); break; }
+      catch(e){
+        if(e.auth){ p.status = 'failed'; p.msg = e.message; tokens = null; SS.del('odm_tokens'); refreshAuthUI(); break; }
+        if(++attempt >= 2){ p.status = 'failed'; p.msg = e.message; break; }
+        await sleep(3000);
+      }
+    }
+    logResult(p); renderFiles();
+    if(!tokens) break;
+  }
+  try{ lock && await lock.release(); }catch(e){}
+  running = false; updateButtons(); renderFiles();
+}
+function logResult(p){
+  const log = history_();
+  log.push({ key: p.key, name: p.file.name, size: p.file.size, modified: new Date(p.file.lastModified).toISOString(),
+    folderId: batch.parentId, folderPath: batch.path, status: p.status === 'sizeonly' ? 'size-only' : p.status,
+    oneDriveName: p.remote ? p.remote.name : '', note: p.msg || '', time: new Date().toISOString() });
+  LS.set('odm_log', log.slice(-5000));
+}
+
+/* ---------- step 5: results ---------- */
+function renderResults(){
+  const ok = picked.filter(p => p.status === 'verified'), so = picked.filter(p => p.status === 'sizeonly'), bad = picked.filter(p => p.status === 'failed');
+  let h = '';
+  if(ok.length) h += `<div class="note good"><b>${ok.length} file(s) verified — safe to delete from the phone:</b><br>${ok.map(p => esc(p.file.name)).join('<br>')}</div>`;
+  if(so.length) h += `<div class="note info"><b>${so.length} file(s) uploaded with matching size</b>, but OneDrive gave no fingerprint to compare. Open them in OneDrive once before deleting:<br>${so.map(p => esc(p.file.name)).join('<br>')}</div>`;
+  if(bad.length) h += `<div class="note err"><b>${bad.length} file(s) failed.</b> They are untouched on your phone. Tap "Retry failed files".</div>`;
+  $('resultBox').innerHTML = h;
+  $('logCount').textContent = `History on this device: ${history_().length} record(s).`;
+}
+function downloadReport(){
+  const log = history_(); if(!log.length){ alert('No history yet.'); return; }
+  const cols = ['time','name','size','modified','folderPath','oneDriveName','status','note'];
+  const q = v => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+  const csv = [cols.join(',')].concat(log.map(r => cols.map(c => q(r[c])).join(','))).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' }));
+  a.download = 'onedrive-upload-report-' + new Date().toISOString().slice(0, 10) + '.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+/* ---------- wiring ---------- */
+$('redirShow').textContent = redirectUri();
+$('copyRedir').onclick = () => navigator.clipboard && navigator.clipboard.writeText(redirectUri()).then(() => { $('copyRedir').textContent = 'Copied'; });
+$('clientId').value = cfg.clientId; $('tenant').value = cfg.tenant;
+if(!cfg.clientId) $('setupDetails').open = true;
+$('saveCfg').onclick = () => {
+  cfg = { clientId: $('clientId').value.trim(), tenant: $('tenant').value }; LS.set('odm_cfg', cfg);
+  $('cfgMsg').textContent = cfg.clientId ? 'Saved ✔' : 'Please paste the ID';
+  if(cfg.clientId) $('setupDetails').open = false;
+};
+$('signIn').onclick = signIn;
+$('signOut').onclick = () => { tokens = null; SS.del('odm_tokens'); refreshAuthUI(); };
+$('browseBtn').onclick = () => { $('browser').hidden = false; browseStack = []; openFolder('root'); };
+$('linkIn').value = (folder && folder.link) || '';
+$('linkBtn').onclick = () => { const u = $('linkIn').value.trim(); if(u) useLink(u); };
+$('upBtn').onclick = goUp; $('newFolderBtn').onclick = newFolder; $('useFolderBtn').onclick = useFolder;
+$('pickBtn').onclick = () => $('filePick').click();
+$('filePick').onchange = e => { addFiles(Array.from(e.target.files)); e.target.value = ''; };
+$('clearBtn').onclick = () => { picked = []; renderFiles(); updateButtons(); };
+$('skipDone').onchange = () => { markSkips(); renderFiles(); updateButtons(); };
+$('startBtn').onclick = () => runAll(true);   // every new run gets a fresh timestamp folder
+$('retryBtn').onclick = () => { for(const p of picked) if(p.status === 'failed'){ p.status = 'waiting'; p.msg = ''; } runAll(false); };  // retries go into the same folder
+$('reportBtn').onclick = downloadReport;
+$('clearLogBtn').onclick = () => { if(confirm('Clear the upload history on this device? (Your files are not affected.)')){ LS.del('odm_log'); markSkips(); renderFiles(); } };
+window.addEventListener('beforeunload', e => { if(running){ e.preventDefault(); e.returnValue = ''; } });
+document.addEventListener('visibilitychange', async () => {
+  if(running && document.visibilityState === 'visible' && 'wakeLock' in navigator){ try{ await navigator.wakeLock.request('screen'); }catch(e){} }
+});
+
+(async () => { showFolder(); renderFiles(); await handleRedirect(); await refreshAuthUI(); })();
+</script>
+</body>
+</html>
